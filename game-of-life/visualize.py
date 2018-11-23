@@ -1,12 +1,11 @@
-import sys
-import numpy as np
 import OpenGL.GL as gl
-
-from patterns import *
-from life import GameOfLife
-from PyQt5.QtCore import pyqtSignal, QPoint, QSize, Qt
+import numpy as np
+from PyQt5.QtCore import pyqtSignal, QPoint, QSize, Qt, QTimer
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication, QOpenGLWidget
+from PyQt5.QtWidgets import QOpenGLWidget
+
+from life import GameOfLife
+from patterns import *
 
 
 # noinspection PyPep8Naming
@@ -15,20 +14,25 @@ class GLWindow(QOpenGLWidget):
 	yRotationChanged = pyqtSignal(int)
 	zRotationChanged = pyqtSignal(int)
 
-	def __init__(self, parent=None):
+	def __init__(self, parent=None, border_width=12):
 		super(GLWindow, self).__init__(parent)
 
-		inp = spaceship()
+		inp = pulsar()
 		pattern = np.array([[0 if j == '.' else 1 for j in i] for i in inp.split()])
 
-		n = 6
+		n = border_width
 		world = np.zeros((pattern.shape[0] + n, pattern.shape[1] + n), dtype=np.bool)
 		world[int(n / 2):pattern.shape[0] + int(n / 2), int(n / 2):pattern.shape[1] + int(n / 2)] = pattern
 
 		self.gol = GameOfLife(world)
 
+		self.generations = 0
+		self.loop = QTimer()
+		self.loop.timeout.connect(self.single_gen)
+
 		self.object = 0
 		self.curr_gen = 0
+
 		self.xRot = 0
 		self.yRot = 0
 		self.zRot = 0
@@ -37,15 +41,19 @@ class GLWindow(QOpenGLWidget):
 		self.leftToScreen = 1.0
 		self.rightToScreen = 1.0
 
-		self.minDepth = -0.8
+		self.minDepth = 0.0
 		self.maxDepth = -1.0
 
 		self.setFocusPolicy(Qt.WheelFocus)
 		self.lastPos = QPoint()
 		self.backgroundColor = QColor(0, 0, 0, 0)
 
-	@staticmethod
-	def getOpenglInfo():
+	#   __       _
+	#  /__ |    |_    ._   _ _|_ o  _  ._   _
+	#  \_| |_   | |_| | | (_  |_ | (_) | | _>
+	#
+
+	def getOpenglInfo(self):
 		return f"""
 			Vendor: {gl.glGetString(gl.GL_VENDOR)}
             Renderer: {gl.glGetString(gl.GL_RENDERER)}
@@ -62,6 +70,71 @@ class GLWindow(QOpenGLWidget):
 		gl.glShadeModel(gl.GL_FLAT)
 		gl.glEnable(gl.GL_DEPTH_TEST)
 		gl.glDisable(gl.GL_CULL_FACE)
+
+	def paintGL(self):
+		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+		gl.glLoadIdentity()
+		gl.glTranslated(0.0, 0.0, -10.0)
+		gl.glRotated(self.xRot / 16.0, 1.0, 0.0, 0.0)
+		gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
+		gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
+		ortho = np.multiply(np.array((-2, +2, -2, +2), dtype=float), self.zoomFactor)
+		# gl.glMatrixMode(gl.GL_PROJECTION)
+		# gl.glLoadIdentity()
+		gl.glOrtho(ortho[0], ortho[1], ortho[2], ortho[3], 4.0, 15.0)
+		# gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glCallList(self.object)
+		gl.glCallList(self.curr_gen)
+
+	def resizeGL(self, width, height):
+		gl.glViewport(0, 0, width, height)
+		gl.glMatrixMode(gl.GL_PROJECTION)
+		gl.glLoadIdentity()
+		gl.glOrtho(-2 * (width / height), +2 * (width / height), -2, +2, 4.0, 15.0)
+		gl.glMatrixMode(gl.GL_MODELVIEW)
+
+	#   _
+	#  |_     _  ._ _|_  _
+	#  |_ \/ (/_ | | |_ _>
+	#
+
+	def keyPressEvent(self, event):
+		if event.key() == Qt.Key_Escape:
+			self.proper_close()
+		elif not self.loop.isActive() and event.key() == Qt.Key_N:
+			self.single_gen()
+		elif event.key() == Qt.Key_P:
+			if not self.loop.isActive():
+				self.loop.start(1000)
+			else:  # pause
+				self.loop.stop()
+
+	def mousePressEvent(self, event):
+		self.lastPos = event.pos()
+		print(f"Mouse Pressed at location {self.lastPos}")
+
+	def mouseMoveEvent(self, event):
+		dx = event.x() - self.lastPos.x()
+		dy = event.y() - self.lastPos.y()
+
+		if event.buttons() == Qt.LeftButton:
+			self.setXRotation(self.xRot + 8 * dy)
+			self.setYRotation(self.yRot + 8 * dx)
+		elif event.buttons() == Qt.RightButton:
+			self.setXRotation(self.xRot + 8 * dy)
+			self.setZRotation(self.zRot + 8 * dx)
+
+		self.lastPos = event.pos()
+
+	def wheelEvent(self, event):
+		"""http://doc.qt.io/qt-5/qwheelevent.html"""
+		scroll = event.angleDelta()
+		if scroll.y() > 0:  # up
+			self.zoomFactor -= 0.1
+			self.update()
+		else:  # down
+			self.zoomFactor += 0.1
+			self.update()
 
 	def makeObject(self):
 		genList = gl.glGenLists(1)
@@ -121,86 +194,17 @@ class GLWindow(QOpenGLWidget):
 	def sizeHint(self):
 		return QSize(800, 800)
 
-	def setXRotation(self, angle):
-		angle = self.normalizeAngle(angle)
-		if angle != self.xRot:
-			self.xRot = angle
-			self.xRotationChanged.emit(angle)
-			self.update()
+	def single_gen(self):
+		self.gol.next_generation()
+		self.curr_gen = self.next_gen()
+		self.generations += 1
+		self.update()
 
-	def setYRotation(self, angle):
-		angle = self.normalizeAngle(angle)
-		if angle != self.yRot:
-			self.yRot = angle
-			self.yRotationChanged.emit(angle)
-			self.update()
+	def proper_close(self):
+		self.loop.stop()
+		self.close()
 
-	def setZRotation(self, angle):
-		angle = self.normalizeAngle(angle)
-		if angle != self.zRot:
-			self.zRot = angle
-			self.zRotationChanged.emit(angle)
-			self.update()
-
-	def paintGL(self):
-		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-		gl.glLoadIdentity()
-		gl.glTranslated(0.0, 0.0, -10.0)
-		gl.glRotated(self.xRot / 16.0, 1.0, 0.0, 0.0)
-		gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
-		gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
-		ortho = np.multiply(np.array((-2, +2, -2, +2), dtype=float), self.zoomFactor)
-		# gl.glMatrixMode(gl.GL_PROJECTION)
-		# gl.glLoadIdentity()
-		gl.glOrtho(ortho[0], ortho[1], ortho[2], ortho[3], 4.0, 15.0)
-		# gl.glMatrixMode(gl.GL_MODELVIEW)
-		gl.glCallList(self.object)
-		gl.glCallList(self.curr_gen)
-
-	def resizeGL(self, width, height):
-		gl.glViewport(0, 0, width, height)
-		gl.glMatrixMode(gl.GL_PROJECTION)
-		gl.glLoadIdentity()
-		gl.glOrtho(-2 * (width / height), +2 * (width / height), -2, +2, 4.0, 15.0)
-		gl.glMatrixMode(gl.GL_MODELVIEW)
-
-	def keyPressEvent(self, event):
-		if event.key() == Qt.Key_Escape:
-			self.close()
-		elif event.key() == Qt.Key_N:
-			self.gol.next_generation()
-			self.curr_gen = self.next_gen()
-			self.update()
-
-	def mousePressEvent(self, event):
-		self.lastPos = event.pos()
-		print(f"Mouse Pressed at location {self.lastPos}")
-
-	def mouseMoveEvent(self, event):
-		dx = event.x() - self.lastPos.x()
-		dy = event.y() - self.lastPos.y()
-
-		if event.buttons() == Qt.LeftButton:
-			self.setXRotation(self.xRot + 8 * dy)
-			self.setYRotation(self.yRot + 8 * dx)
-		elif event.buttons() == Qt.RightButton:
-			self.setXRotation(self.xRot + 8 * dy)
-			self.setZRotation(self.zRot + 8 * dx)
-
-		self.lastPos = event.pos()
-
-	def wheelEvent(self, event):
-		"""http://doc.qt.io/qt-5/qwheelevent.html"""
-		scroll = event.angleDelta()
-		if scroll.y() > 0:  # up
-			self.zoomFactor -= 0.1
-			self.update()
-		else:  # down
-			self.zoomFactor += 0.1
-			self.update()
-
-	@staticmethod
-	def box(minPoint, maxPoint):
+	def box(self, minPoint, maxPoint):
 		gl.glBegin(gl.GL_LINES)
 		gl.glVertex3f(minPoint[0], minPoint[1], minPoint[2])
 		gl.glVertex3f(maxPoint[0], minPoint[1], minPoint[2])
@@ -231,8 +235,7 @@ class GLWindow(QOpenGLWidget):
 		gl.glVertex3f(minPoint[0], maxPoint[1], minPoint[2])
 		gl.glEnd()
 
-	@staticmethod
-	def quad(x1, y1, x2, y2, x3, y3, x4, y4, z1, z2):
+	def quad(self, x1, y1, x2, y2, x3, y3, x4, y4, z1, z2):
 		gl.glVertex3d(x1, y1, z1)
 		gl.glVertex3d(x2, y2, z1)
 		gl.glVertex3d(x3, y3, z1)
@@ -273,15 +276,34 @@ class GLWindow(QOpenGLWidget):
 			angle -= 360 * 16
 		return angle
 
+	#   __
+	#  (_   _ _|_ _|_  _  ._ _
+	#  __) (/_ |_  |_ (/_ | _>
+	#
+
+	def setXRotation(self, angle):
+		angle = self.normalizeAngle(angle)
+		if angle != self.xRot:
+			self.xRot = angle
+			self.xRotationChanged.emit(angle)
+			self.update()
+
+	def setYRotation(self, angle):
+		angle = self.normalizeAngle(angle)
+		if angle != self.yRot:
+			self.yRot = angle
+			self.yRotationChanged.emit(angle)
+			self.update()
+
+	def setZRotation(self, angle):
+		angle = self.normalizeAngle(angle)
+		if angle != self.zRot:
+			self.zRot = angle
+			self.zRotationChanged.emit(angle)
+			self.update()
+
 	def setClearColor(self, c):
 		gl.glClearColor(c.redF(), c.greenF(), c.blueF(), c.alphaF())
 
 	def setColor(self, c):
 		gl.glColor4f(c.redF(), c.greenF(), c.blueF(), c.alphaF())
-
-
-if __name__ == '__main__':
-	app = QApplication(sys.argv)
-	window = GLWindow()
-	window.show()
-	sys.exit(app.exec_())
