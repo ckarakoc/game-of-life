@@ -1,6 +1,8 @@
 # Game Of Life 
 Conway's game of life written in PyQt5 OpenGL
 
+![Introduction](assets/readme_intro.gif)
+
 # Todo
 - make classes more modular (i.e. quad/box/parameters in methods)
 - make cubes instead of quads
